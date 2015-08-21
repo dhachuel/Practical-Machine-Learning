@@ -1,0 +1,172 @@
+---
+title: "Practical Machine Learning Project"
+author: "David Hachuel"
+date: "Wednesday, August 19, 2015"
+output: html_document
+---
+
+## Executive Summary
+******
+
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+The goal of this project is to predict the manner of performing unilateral dumbbell biceps curls based on data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The 5 possible methods include -
+
+A: exactly according to the specification
+B: throwing the elbows to the front
+C: lifting the dumbbell only halfway
+D: lowering the dumbbell only halfway
+E: throwing the hips to the front
+
+
+
+## Setting Up Environment (packages and settings) 
+******
+
+In addition to the machine learning related packages (random forests and caret), **reshape** is used to transform data for plotting purposes and the pseudo-random number generator seed is set to guarantee reproducibility.  
+```{r, warning=FALSE}
+# ENVIRONMENT SET UP
+suppressMessages(library(caret))
+suppressMessages(library(ggplot2))
+suppressMessages(library(randomForest))
+suppressMessages(library(reshape2))
+set.seed(1)
+```
+
+Here is the output function used to export test cases to text file. 
+```{r}
+# HELPER FUNCTION
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+```
+
+
+## Data Loading and Cleaning 
+******
+
+```{r, cache=TRUE}
+# Load datA
+training <- read.table(
+  file = "pml-training.csv",
+  header = TRUE,
+  na.strings=c("NA","#DIV/0!",""),
+  sep = ","
+)
+testing <- read.table(
+  file = "pml-testing.csv",
+  header = TRUE,
+  na.strings=c("NA","#DIV/0!",""),
+  sep = ","
+)
+```
+
+When cleaning data, it is important to make sure that all features used during training have a value in the test data set. It is also important to make sure that all variable "make sense" as feature. For instance, the **username** variable doesn't make sense as a model feature.
+
+```{r, cache=TRUE}
+# Remove NA fields equally from both training and test data sets
+training.clean <- training[,colSums(is.na(training)) == 0]
+testing.clean <- testing[,colSums(is.na(testing)) == 0]
+
+# Remove unrelated fields such as timestamp or usernames (fields 1 through 7)
+training.clean <- training.clean[,-c(1:7)]
+testing.clean <- testing.clean[,-c(1:7)]
+```
+
+
+
+## Exploratory Feature Analysis 
+******
+For visual purposes, it is interesting to plot the distribution of each numerical variable segmented by the *class* factor variable. 
+
+```{r, cache=TRUE}
+# Select numeric fields
+training.clean2 <- training.clean
+training.clean2$classe <- as.numeric(training.clean2$classe)
+numeric_cols <- sapply(training.clean2, is.numeric)
+
+# Melt dataset using reshape
+training.clean.lng <- melt(training.clean2[,numeric_cols], id="classe")
+
+# Plot the distribution for each classe in a given variable
+ggplot(aes(x=value, group=classe, colour=factor(classe)), data=training.clean.lng) + 
+  geom_density() +
+  facet_wrap(~variable, scales="free") +
+  ggtitle("Exploratory Feature Distribution Plot")
+
+# Remove unused data sets to rpeserve memory
+rm(training.clean2)
+rm(training.clean.lng)
+```
+
+
+
+## Model Calibration
+******
+
+For calibration purpose, the training data set will be split into train (60%) and test sets (40%).
+
+```{r, cache=TRUE}
+# Splitting the training set for calibration
+idx <- runif(nrow(training.clean)) > 0.6
+train <- training.clean[idx==FALSE,]
+test <- training.clean[idx==TRUE,]
+```
+
+One property of machine learning algorithms is that they are heavily parametrized. In other words, they require input parameter fine tuning to obtain optimal results. For this model, the random forest algorithm requires tuning of two main parameters:
+
+#### MTRY (number of variable to randomly try at each tree split)
+```{r, cache=TRUE}
+# Tuning mtry parameter
+tune.rf <- tuneRF(x = train[,-53],y = train[,53], stepFactor=0.5, mtryStart = 2, ntreeTry = 500)
+```
+
+It seems that the optimal mtry value that minimizes the OOB error rate is **16**.
+
+#### NTREE (number of trees to grow in the forest)
+```{r, cache=TRUE}
+rf.fit <- randomForest(factor(classe)~.,data=train, mtry=16, ntree=500, na.action=na.omit)
+plot(rf.fit) # plotting OOB error rate for each class and global
+print(rf.fit$confusion) # print OOB confusion matrix
+```
+
+It definitely looks like 500 trees is more than enough to stabilize the OOB error rate.
+
+Here are the testing result when applying the preliminary calibrated model to the test data set.
+```{r, cache=TRUE}
+# Test Model
+rf.predict = predict(rf.fit,newdata=test)
+confusionMatrix(rf.predict, test$classe)
+```
+
+Note the accuracy is close to 1. 
+
+
+## Final Model and Test Case generation
+******
+First let's train the random forest on the entire training set using the calibrated parameters.
+```{r,cache=TRUE}
+# Train Random Forest on the entire training set
+rf.fit.final <- randomForest(factor(classe)~.,data=training.clean, mtry=16, ntree=500, na.action=na.omit)
+print(rf.fit.final$confusion) # confusion matrix for OOB observations
+```
+
+Finally, let's generate the text files with the test cases predictions.
+```{r,cache=TRUE}
+# Generate test cases and corresponding files
+predictions <- predict(rf.fit.final, newdata=testing.clean)
+answers <- as.vector(as.character(as.data.frame(predictions)$predictions))
+pml_write_files(answers)
+```
+
+
+
+
+
+
+
